@@ -47,13 +47,20 @@ const BASE_UP = [
   { id: 'door', name: '防盜鋼門', price: 68000, desc: '基地防禦 +20' },
   { id: 'window', name: '鐵窗加固＋防颱板', price: 45000, desc: '基地防禦 +12，颱風不受損' },
   { id: 'cam', name: '走廊監視器＋警報器', price: 18000, desc: '基地防禦 +6，夜襲時提早預警' },
-  { id: 'gen', name: '柴油發電機', price: 85000, desc: '第 4 週停電後，每週耗 1 桶柴油供電' },
-  { id: 'solar', name: '太陽能板＋儲電組', price: 180000, desc: '停電後免燃料供電' },
+  { id: 'gen', name: '柴油發電機', price: 85000, desc: '第 4 週停電後供電 5 單位，每桶柴油可撐 5 單位的一週負載' },
+  { id: 'gen2', name: '變頻靜音發電機', price: 150000, need: 'gen', desc: '供電 10 單位，每桶柴油可撐 8 單位，更省油' },
+  { id: 'gen3', name: '工業級發電機組', price: 320000, need: 'gen2', desc: '供電 20 單位，每桶柴油可撐 12 單位，帶得動 AI 伺服器' },
+  { id: 'solar', name: '太陽能板＋儲電組', price: 180000, desc: '停電後免燃料供電 5 單位' },
+  { id: 'solar2', name: '擴充太陽能陣列＋鋰電儲能櫃', price: 420000, need: 'solar', desc: '免燃料供電提升到 12 單位，不夠的部分才補柴油' },
+  { id: 'ai', name: 'AI 大型伺服器（GPU 機櫃）', price: 980000, desc: '離線大型語言模型＋醫療／農業／軍事知識庫。運轉耗電 8 單位，解鎖專屬劇情與加成' },
   { id: 'purifier', name: '雨水淨水系統', price: 28000, desc: '飲水消耗減半' },
   { id: 'garden', name: '頂樓菜園組', price: 32000, desc: '第 8 週起每週產出 2 份糧食' },
   { id: 'room', name: '租下對門空屋 1201', price: 36000, desc: '倉儲上限 +250（屋主在加拿大，只收現金）' },
   { id: 'car', name: '二手休旅車', price: 380000, desc: '解鎖遠距離搜刮、收穫 +30%、撤退率提升' }
 ];
+/* 電力：停電後（第 4 週起）每週結算。負載 = 基本設備 +（AI 伺服器 8）；先用太陽能，缺口由發電機補，依缺口耗柴油 */
+const GENS = { gen: { out: 5, eff: 5 }, gen2: { out: 10, eff: 8 }, gen3: { out: 20, eff: 12 } };
+const AI_LOAD = 8;
 const LOANS = {
   card: { name: '信用卡預借現金', max: 200000, desc: '三張卡額度合計，立即入帳' },
   bank: { name: '銀行個人信貸', amount: 800000, delay: 5, desc: '需在職證明（辭職後無法申請），審核 5 天' },
@@ -122,7 +129,42 @@ function baseDef() {
   d += Math.min(S.survivors, 15) * 2 + S.fort;
   if (S.h.ye.joined && S.h.ye.alive) d += 10;
   if (S.flags.chen) d += 5;
+  if (aiMod('tac')) d += 8;
   return d;
+}
+const aiMod = k => !!(S.flags.aiOn && S.flags.aiMods && S.flags.aiMods[k]);
+const genTier = () => S.base.gen3 ? GENS.gen3 : S.base.gen2 ? GENS.gen2 : S.base.gen ? GENS.gen : null;
+const solarOut = () => S.base.solar2 ? 12 : S.base.solar ? 5 : 0;
+function powerLoad() {
+  let d = 3;
+  if (S.base.purifier) d++;
+  if (S.base.cam) d++;
+  if (S.base.garden && S.week >= 8) d++;
+  d += Math.ceil(S.survivors / 5);
+  if (S.h.shen.joined && S.h.shen.alive && S.research >= 1 && !S.flags.cure) d += 2;
+  return d;
+}
+function powerPlan() {
+  const base = powerLoad(), aiL = S.base.ai ? AI_LOAD : 0, sol = solarOut(), g = genTier();
+  const cap = sol + (g ? g.out : 0);
+  const run = need => {
+    const gap = Math.max(0, need - sol);
+    if (!gap) return 0;
+    return g && g.out >= gap ? Math.ceil(gap / g.eff) : -1;
+  };
+  const fFull = run(base + aiL), fBase = run(base);
+  const ok = f => f >= 0 && f <= S.inv.fuel;
+  const res = { base, cap, load: base, on: false, ai: false, fuel: 0, why: '' };
+  if (aiL && ok(fFull)) { res.on = res.ai = true; res.fuel = fFull; res.load = base + aiL; }
+  else if (ok(fBase)) { res.on = true; res.fuel = fBase; }
+  else res.why = !g && !sol ? '沒有發電設備' : fBase < 0 ? '發電能力不足' : '柴油不足';
+  return res;
+}
+function powerText() {
+  if (S.week < 4) return '';
+  if (!genTier() && !solarOut()) return '・沒有電';
+  const p = powerPlan();
+  return `・電力 ${p.load}/${p.cap}${p.on ? (p.fuel ? `（柴油 ${p.fuel}）` : '（免燃料）') : `（${p.why}）`}${S.base.ai ? (p.ai ? '・小翠運轉中' : '・AI 離線') : ''}`;
 }
 function dateObj() { return S.phase === 'prep' ? new Date(2026, 11, S.day) : new Date(2027, 0, 1 + 7 * (Math.max(1, S.week) - 1)); }
 function dateLabel() { const d = dateObj(); return `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')}`; }
@@ -135,7 +177,7 @@ function needs() {
 }
 
 /* ========== 文字顯示 ========== */
-const SPK = { '蘇晴': 'su', '葉凜': 'ye', '沈語桐': 'shen', '趙德凱': 'zhao' };
+const SPK = { '蘇晴': 'su', '葉凜': 'ye', '沈語桐': 'shen', '趙德凱': 'zhao', '小翠': 'ai' };
 function T(s) { return String(s).replace(/\{N\}/g, S ? S.name : '林昊'); }
 function lineHTML(l) {
   if (Array.isArray(l)) return `<p class="say ${SPK[l[0]] || ''}"><b>${T(l[0])}</b><span>${T(l[1])}</span></p>`;
@@ -213,6 +255,7 @@ function render() {
   chips += chip('糧', S.inv.food, !prep && S.inv.food < n.food * 2) + chip('水', S.inv.water, !prep && S.week >= 2 && S.inv.water < n.water * 2) +
     chip('藥', S.inv.med) + chip('油', S.inv.fuel) + (S.crossbow ? chip('箭', S.inv.ammo) : '') + (S.gun ? chip('彈', S.inv.bullet) : '');
   if (!prep) chips += chip('士氣', S.morale, S.morale < 30) + chip('防禦', baseDef()) + chip('倖存者', S.survivors) + (S.dark ? chip('惡名', S.dark) : '');
+  if (!prep && S.week >= 4 && (genTier() || solarOut())) { const p = powerPlan(); chips += chip('電力', `${p.load}/${p.cap}`, !p.on); }
   $('#hudIn').innerHTML = `
    <div class="hud-top"><div class="date">${dateLabel()}<small>星期${WD[d.getDay()]}</small></div><div class="count">${cnt}</div></div>
    <div class="hud-top"><div class="hpbar">HP <div class="bar ${S.hp < 35 ? 'red' : ''}"><i style="width:${S.hp / S.maxhp * 100}%"></i></div><span style="font-family:var(--f-num)">${S.hp}/${S.maxhp}</span></div></div>
@@ -370,6 +413,8 @@ function panelBag() {
     <div class="kv">${rows}<span>倉儲</span><b>${stored()} / ${capacity()}</b></div>
     ${S.phase === 'apoc' ? `<div class="kv"><span>每週糧食消耗</span><b>${n.food}</b><span>每週飲水消耗</span><b>${n.water}</b><span>存糧可撐</span><b>${Math.floor(S.inv.food / Math.max(1, n.food))} 週</b></div>` : ''}
     <div class="kv"><span>基地設施</span><span>${bases}</span></div>
+    ${S.phase === 'apoc' && S.week >= 4 && (genTier() || solarOut()) ? (p => `<div class="kv"><span>電力負載／供給</span><b>${p.load} / ${p.cap}</b><span>本週柴油</span><b>${p.on ? p.fuel : '—'}</b>${S.base.ai ? `<span>小翠</span><span>${p.ai ? '運轉中' : '離線（' + (p.why || '電力吃緊') + '）'}</span>` : ''}</div>`)(powerPlan()) : ''}
+    ${S.base.ai && S.flags.aiMods ? `<div class="kv"><span>AI 模組</span><span>${Object.keys(S.flags.aiMods).map(k => AI_MODS[k].name).join('、') || '尚未啟用'}</span></div>` : ''}
     <button class="sbtn" id="useMed" ${S.inv.med > 0 && S.hp < S.maxhp ? '' : 'disabled'}>使用醫療包（回復 ${30 + S.aid * 8} HP）</button>`,
     b => { const u = b.querySelector('#useMed'); if (u) u.onclick = () => { gain('med', -1, true); hpc(30 + S.aid * 8); render(); panelBag(); }; });
 }
@@ -402,7 +447,10 @@ function phone(tab) {
       + (S.flags.flyer ? `<div class="row ${S.gun ? 'owned' : ''}"><div class="nm">阿彪的黑市改造手槍</div><div class="pr">150,000</div><div class="ds">戰鬥中開槍 32～44 傷害、無視防禦。附 12 發子彈，之後子彈可在「物資」補貨</div><div class="bt"><button data-gun="1" ${!S.gun && S.money >= 150000 ? '' : 'disabled'}>${S.gun ? '已擁有' : '私下交易'}</button></div></div>` : '')
       + `<div class="row ${S.crossbow ? 'owned' : ''}"><div class="nm">複合十字弓</div><div class="pr">32,000</div><div class="ds">戰鬥中可射擊，35～45 傷害且無視防禦。附 10 支弩箭</div><div class="bt"><button data-x="1" ${!S.crossbow && S.money >= 32000 ? '' : 'disabled'}>${S.crossbow ? '已擁有' : '購買'}</button></div></div>`;
   } else if (phoneTab === 'base') {
-    body = BASE_UP.map(b => `<div class="row ${S.base[b.id] ? 'owned' : ''}"><div class="nm">${b.name}</div><div class="pr">${fmt(b.price)}</div><div class="ds">${b.desc}</div><div class="bt"><button data-b="${b.id}" ${!S.base[b.id] && S.money >= b.price ? '' : 'disabled'}>${S.base[b.id] ? '已完成' : '購買'}</button></div></div>`).join('');
+    const lockedBy = b => b.need && !S.base[b.need] ? BASE_UP.find(z => z.id === b.need).name : '';
+    const supply = solarOut() + (genTier() ? genTier().out : 0), want = powerLoad() + (S.base.ai ? AI_LOAD : 0);
+    body = `<div class="kv"><span>停電後供電能力</span><b>${supply} 單位</b><span>預估負載（初期）</span><b>${want} 單位</b></div>`
+      + BASE_UP.map(b => `<div class="row ${S.base[b.id] ? 'owned' : ''}"><div class="nm">${b.name}</div><div class="pr">${fmt(b.price)}</div><div class="ds">${b.desc}${lockedBy(b) ? `・需先購買「${lockedBy(b)}」` : ''}</div><div class="bt"><button data-b="${b.id}" ${!S.base[b.id] && !lockedBy(b) && S.money >= b.price ? '' : 'disabled'}>${S.base[b.id] ? '已完成' : '購買'}</button></div></div>`).join('');
   } else if (phoneTab === 'loan') {
     const pend = t => S.pending.find(p => p.type === t);
     const cardLeft = LOANS.card.max - S.debt.card;
@@ -422,7 +470,7 @@ function phone(tab) {
     b.querySelectorAll('[data-a]').forEach(x => x.onclick = () => { S.money -= 6500; S.armor = 'jacket'; toast('取得防割夾克', 'ok'); render(); phone(); });
     b.querySelectorAll('[data-gun]').forEach(x => x.onclick = () => { S.money -= 150000; S.gun = 'bmpistol'; S.inv.bullet += 12; log('向阿彪買了黑市手槍'); toast('取得黑市改造手槍', 'ok'); render(); phone(); });
     b.querySelectorAll('[data-x]').forEach(x => x.onclick = () => { S.money -= 32000; S.crossbow = true; S.inv.ammo += 10; toast('取得十字弓', 'ok'); render(); phone(); });
-    b.querySelectorAll('[data-b]').forEach(x => x.onclick = () => { const u = BASE_UP.find(z => z.id === x.dataset.b); S.money -= u.price; S.base[u.id] = true; toast(`完成：${u.name}`, 'ok'); log(`購入 ${u.name}`); render(); phone(); });
+    b.querySelectorAll('[data-b]').forEach(x => x.onclick = () => { const u = BASE_UP.find(z => z.id === x.dataset.b); S.money -= u.price; S.base[u.id] = true; toast(`完成：${u.name}`, 'ok'); log(`購入 ${u.name}`); render(); if (u.id === 'ai') { closeSheet(true); return aiDelivery(); } phone(); });
     b.querySelectorAll('[data-card]').forEach(x => x.onclick = () => { const v = +x.dataset.card; S.debt.card += v; S.money += v; toast(`預借現金 +${fmt(v)}`, 'ok'); render(); phone(); });
     b.querySelectorAll('[data-bank]').forEach(x => x.onclick = () => { S.applied.bank = true; S.pending.push({ type: 'bank', amount: LOANS.bank.amount, day: S.day + 5 }); toast('信貸申請送出', 'amber'); log('申請銀行信貸 80 萬'); phone(); });
     b.querySelectorAll('[data-shark]').forEach(x => x.onclick = () => { S.debt.shark = 300000; S.money += 300000; toast('阿彪財務 +300,000', 'ok'); log('向阿彪財務借款 30 萬'); render(); phone(); });
@@ -507,12 +555,13 @@ function visit(k, next) {
 /* ========== 末日期 ========== */
 function startApoc() {
   S.phase = 'apoc'; S.week = 1; S.fired = Object.assign(S.fired, {});
+  S.flags.aiOn = !!S.base.ai;
   log('紅眼病爆發');
   startWeek();
 }
 function startWeek() {
   render();
-  const hq = HEROINE_Q.find(e => !S.fired[e.id] && e.if());
+  const hq = HEROINE_Q.concat(AI_Q).find(e => !S.fired[e.id] && e.if());
   const fn = APOC_EV[S.week];
   if (fn && !S.fired['w' + S.week]) { S.fired['w' + S.week] = 1; return fn(apocHub); }
   if (hq && !(fn && !S.fired['w' + S.week])) { S.fired[hq.id] = 1; return hq.run(apocHub); }
@@ -523,7 +572,7 @@ function apocHub() {
   if (S.phase !== 'apoc') return resume();
   const n = needs(), p = party();
   const lines = [`#第 ${S.week} 週・${shortDate()} 起`];
-  lines.push(`<p class="mono">每週消耗：糧食 ${n.food}、飲水 ${n.water}${S.week >= 4 ? (S.base.solar ? '・太陽能供電中' : S.base.gen ? '・發電機需柴油 1' : '・沒有電') : ''}。存糧可撐 ${Math.floor(S.inv.food / Math.max(1, n.food))} 週。</p>`);
+  lines.push(`<p class="mono">每週消耗：糧食 ${n.food}、飲水 ${n.water}${powerText()}。存糧可撐 ${Math.floor(S.inv.food / Math.max(1, n.food))} 週。</p>`);
   lines.push(p.length ? `同住的人：${p.map(k => HER[k].name).join('、')}${S.survivors ? `，還有 ${S.survivors} 位倖存者` : ''}。` : S.survivors ? `大樓裡和你一起守著的倖存者有 ${S.survivors} 位。` : '這間屋子裡，只有你一個人的呼吸聲。');
   const acts = [
     { t: '外出搜刮', sub: '選擇地點與同行者，可能遭遇戰鬥', do: scavMenu },
@@ -598,6 +647,7 @@ function endWeek() {
   // 生產
   let fp = 0, wp = 0;
   if (S.base.garden && S.week >= 8) fp += 2;
+  if (aiMod('farm')) { fp += 2; rows.push(['小翠農業排程 糧食', '+2', 'pos']); }
   if (S.survivors >= 3) { fp += Math.floor(S.survivors / 3); wp += Math.floor(S.survivors / 3); }
   if (fp) rows.push(['菜園／倖存者採集 糧食', '+' + fp, 'pos']);
   if (wp) rows.push(['倖存者採集 飲水', '+' + wp, 'pos']);
@@ -609,16 +659,24 @@ function endWeek() {
   else { S.inv.food = 0; S.hp -= 15; S.morale -= 12; party().forEach(k => S.h[k].aff = Math.max(0, S.h[k].aff - 3)); msgs.push('糧食不夠了。大家餓著肚子過了這一週。（HP -15、士氣 -12）'); }
   if (S.inv.water >= n.water) S.inv.water -= n.water;
   else { S.inv.water = 0; S.hp -= 20; S.morale -= 15; msgs.push('沒有乾淨的水。嘴唇乾裂，有人開始喝浴缸裡的積水。（HP -20、士氣 -15）'); }
+  const aiHeal = aiMod('med') ? 6 : 0;
+  S.flags.aiOn = !!S.base.ai;
   if (S.week >= 4) {
-    if (S.base.solar) rows.push(['太陽能供電', '正常', 'pos']);
-    else if (S.base.gen && S.inv.fuel > 0) { S.inv.fuel--; rows.push(['發電機柴油', '-1', 'neg']); }
-    else { S.morale -= 6; msgs.push('又是摸黑的一週。（士氣 -6）'); }
+    const pw = powerPlan();
+    S.flags.aiOn = pw.ai;
+    if (pw.on) {
+      if (pw.fuel) { S.inv.fuel -= pw.fuel; rows.push(['發電機柴油', '-' + pw.fuel, 'neg']); }
+      else rows.push(['太陽能供電', '正常', 'pos']);
+      rows.push(['電力 負載／供給', `${pw.load}／${pw.cap}`, '']);
+    } else { S.morale -= 6; msgs.push(`又是摸黑的一週（${pw.why}）。（士氣 -6）`); }
+    if (S.base.ai && !pw.ai) msgs.push('小翠因電力不足自動關機，AI 加成與專屬劇情暫停。');
   }
+  if (aiHeal) rows.push(['小翠醫療診斷 HP', '+' + aiHeal, 'pos']);
   if (S.morale <= 0) { S.hp -= 10; msgs.push('你已經撐不太下去了。（HP -10）'); }
-  S.hp = Math.min(S.maxhp, S.hp + 8);
+  S.hp = Math.min(S.maxhp, S.hp + 8 + aiHeal);
   S.morale = clamp(S.morale, 0, 100);
   // 夜襲
-  if (S.week >= 3 && chance((.2 + S.week * .006) * (S.flags.fear ? .6 : 1))) {
+  if (S.week >= 3 && chance((.2 + S.week * .006) * (S.flags.fear ? .6 : 1) * (S.flags.aiNet && S.flags.aiOn ? .7 : 1))) {
     const str = Math.round(10 + S.week * 1.3 + R(0, 10)), d = baseDef() + (S.base.cam ? 8 : 0);
     if (d >= str) { S.morale = clamp(S.morale + 3, 0, 100); msgs.push(`深夜，屍群撞上了翠湖苑的防線（強度 ${str}）。${S.base.cam ? '警報器提早響起，' : ''}防線守住了。（防禦 ${d}，士氣 +3）`); }
     else { const lf = Math.min(S.inv.food, R(1, 4)); S.inv.food -= lf; S.hp -= R(10, 20); S.morale = clamp(S.morale - 8, 0, 100); S.fort = Math.max(0, S.fort - 6); msgs.push(`深夜，屍群衝破了樓梯間的路障（強度 ${str}，你的防禦 ${d}）。混戰到天亮，丟了 ${lf} 份糧食。`); }
