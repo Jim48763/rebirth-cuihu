@@ -106,7 +106,9 @@ const ENEMY = {
 };
 const ENDINGS = {
   death: '重蹈覆轍', lone: '一個人的黎明', su: '晴空之下', ye: '凜冬守望', shen: '桐花再開',
-  harem: '三人份的明天', king: '翠湖苑之王', tyrant: '血色王座', true: '黎明之後'
+  harem: '三人份的明天', king: '翠湖苑之王', tyrant: '血色王座', true: '黎明之後',
+  ai: '不眠的小翠', army: '軍旗下的黎明', merchant: '末日商會', fortress: '鋼鐵翠湖', lighthouse: '翠湖的燈塔',
+  starve: '空空的櫥櫃', surrender: '末日沒有俘虜', infected: '紅色的黎明', betrayed: '笑臉迎人', reckless: '做死大賞'
 };
 
 /* ========== 狀態 ========== */
@@ -220,6 +222,7 @@ function renderChoices(ch) {
     if (o.if && !o.if()) return;
     const b = document.createElement('button');
     b.className = 'choice' + (o.cls ? ' ' + o.cls : '');
+    if (o.fool) b.dataset.fool = '1';
     const ok = !o.req || o.req();
     b.disabled = !ok;
     const sub = typeof o.sub === 'function' ? o.sub() : o.sub;
@@ -598,6 +601,8 @@ function apocHub() {
     { t: '陪伴', cls: 'love', sub: '與同住的她共度一週', if: () => p.length > 0, do: () => ask(['要陪誰？'], [...p.map(k => ({ t: HER[k].name, sub: `好感 ${S.h[k].aff}`, cls: 'love', do: () => visit(k, endWeek) })), { t: '返回', do: apocHub }]) },
     { t: '協助血清研究', sub: `研究進度 ${S.research}/4（需要醫療包 ${S.base.pc && powered() ? 1 : 2}）`, if: () => S.h.shen.joined && S.h.shen.alive && S.research >= 1 && S.research < 3, req: () => S.inv.med >= (S.base.pc && powered() ? 1 : 2), why: '醫療包不足', do: () => { gain('med', S.base.pc && powered() ? -1 : -2); S.research++; aff('shen', 4); log('協助血清研究'); say(['沈語桐在書房裡架起臨時實驗台，你負責消毒器材、記錄數據。', ['沈語桐', '再一點點……抑制劑的穩定性又提高了。謝謝你，{N}。'], `＊血清研究 ${S.research}/4`], endWeek); } },
     { t: '掠奪', cls: 'hot', sub: '襲擊其他住戶與據點，搶走他們的物資（惡名上升）', if: () => S.week >= 2 && RAIDS.some(r => !S.raided[r.id] && (!r.req || r.req())), do: raidMenu },
+    { t: '在頂樓放鞭炮慶祝', cls: 'hot', sub: '士氣大幅提升，但聲音傳得很遠', if: () => S.week >= 3 && !S.flags.fireDone, do: fireworks },
+    { t: '偷偷注射沈語桐那管「還沒測試」的血清', cls: 'hot', sub: '也許你會變強，也許……', if: () => S.h.shen.joined && S.h.shen.alive && S.research >= 2 && !S.flags.serumTried, do: serumGamble },
     { t: '休養', sub: '生命 +40，士氣 +5', do: () => { log('休養'); S.hp = Math.min(S.maxhp, S.hp + 40); S.morale = clamp(S.morale + 5, 0, 100); say(['你難得睡了整整一天。夢裡沒有紅眼睛。'], endWeek); } }
   ];
   ask(lines, acts);
@@ -619,7 +624,20 @@ function scavMenu() {
 function compMenu(k) {
   const p = party();
   if (!p.length) return scav(k, null);
-  ask([`要帶誰一起去${LOCS[k].name}？`], [...p.map(h => ({ t: HER[h].name, sub: HER[h].ally, cls: 'love', do: () => scav(k, h) })), { t: '獨自前往', do: () => scav(k, null) }]);
+  ask([`要帶誰一起去${LOCS[k].name}？`], [...p.map(h => { const hint = ((ALLY_LOC[h] || {})[k] || {}).hint; return { t: HER[h].name, sub: HER[h].ally + (hint ? '｜' + hint : ''), cls: 'love', do: () => scav(k, h) }; }), { t: '獨自前往', do: () => scav(k, null) }]);
+}
+function allyFight(a) {
+  const fz = S.h[a].fall === 'fallen';
+  return pick((fz ? ALLY_FIGHT_FZ : ALLY_FIGHT)[a]);
+}
+function allyScav(a, k, lines) {
+  const fz = S.h[a].fall === 'fallen', t = (ALLY_LOC[a] || {})[k];
+  if (t) {
+    lines.push(...(fz && t.fz ? t.fz : t.n));
+    if (t.fx) { const m = t.fx(); if (m) lines.push(`＊${m}`); }
+    aff(a, t.aff === undefined ? 2 : t.aff);
+    if (chance(.3)) lines.push(pick(ALLY_AFTER[a]));
+  } else lines.push(pick(ALLY_AFTER[a]));
 }
 function encounter(dg) {
   const w = S.week, pool = ['walker', 'walker', 'dog'];
@@ -647,13 +665,13 @@ function scav(k, ally) {
     if (k === 'base' && S.flags.retryCure && !S.flags.cure && S.research >= 3 && S.h.shen.joined && S.h.shen.alive) { S.research = 4; S.flags.cure = 1; aff('shen', 10); lines.push('這一次，你們護著沈語桐衝進了生化實驗室。黎明時，第一管血清完成了。', '＊血清完成'); }
     if (k === 'base' && !S.flags.rifle) { S.flags.rifle = 1; S.gun = 'rifle'; S.inv.bullet += 30; lines.push('＊取得 T91 步槍、子彈 30 發'); }
     if (k === 'base' && !S.flags.milLink) { S.flags.milLink = 1; lines.push('在地下指揮所，你找到仍在運作的軍用無線電，和一群還活著的士兵。他們願意與翠湖苑合作。', '＊與國軍殘部建立聯繫'); if (WEAPONS[S.weapon].atk < 16) { S.weapon = 'bayonet'; lines.push('＊取得軍用刺刀'); } }
-    if (ally) lines.push(pick(ALLY_AFTER[ally]));
+    if (ally) allyScav(ally, k, lines);
     if (LOC_EV[k] && !S.flags['loc_' + k] && chance(.45)) { S.flags['loc_' + k] = 1; return say(lines, () => LOC_EV[k](endWeek)); }
     say(lines, endWeek);
   };
   if (chance(L.risk * (fx('radio') ? .9 : 1) * (S.base.drone && S.flags.aiOn ? .8 : 1))) {
     combat(encounter(L.danger), {
-      ally, intro: `你在${L.name}被盯上了。`, noDeath: true, win: after,
+      ally, intro: [`你在${L.name}被盯上了。`, ally ? allyFight(ally) : ''], noDeath: true, win: after,
       flee: () => say(['你拉著同伴從後門撤退，空手回到翠湖苑。'], endWeek),
       surrender: () => say(['你交出了身上帶的東西，空手回到翠湖苑。'], endWeek),
       lose: () => { hpc(-0); S.morale = clamp(S.morale - 15, 0, 100); say(['你倒在血泊裡，是同行的人和樓下的倖存者把你拖回來的。', '＊重傷，士氣 -15'], endWeek); }
@@ -711,7 +729,7 @@ function endWeek() {
     else { const cl = S.base.cellar, lf = Math.min(S.inv.food, cl ? R(0, 1) : R(1, 4)); S.inv.food -= lf; S.hp -= Math.round(R(10, 20) * (cl ? .6 : 1)); S.morale = clamp(S.morale - 8, 0, 100); S.fort = Math.max(0, S.fort - 6); msgs.push(`深夜，屍群衝破了樓梯間的路障（強度 ${str}，你的防禦 ${d}）。混戰到天亮，丟了 ${lf} 份糧食。`); }
   }
   log(`第 ${S.week} 週結束`);
-  if (S.hp <= 0) return ending('death', 'starve');
+  if (S.hp <= 0) return ending('starve');
   const tbl = `<div class="tbl">${rows.map(r => `<span>${r[0]}</span><span class="${r[2]}">${r[1]}</span>`).join('')}<span>剩餘 糧食／飲水／柴油</span><span>${S.inv.food}／${S.inv.water}／${S.inv.fuel}</span></div>`;
   S.week++;
   if (S.week > 52) return say([`#第 52 週結束`, tbl, ...msgs, '2027 年的最後一個夜晚。一年前的這個時候，世界在你眼前碎掉。'], finalEnding, '迎接結局');
@@ -751,7 +769,8 @@ function raidGo(r) {
       Object.entries(r.loot).forEach(([it, [a, b]]) => { const q = R(a, b); S.inv[it] += q; got.push(`${ITEMS[it].name} ${q}`); });
       if (r.loot.bullet && !S.gun) { S.gun = 'pistol'; got.push('T75 手槍'); }
       dark(r.dk); S.rep = clamp(S.rep - 5, 0, 100); mor(8); S.flags.fear = 1; log(`掠奪${r.name}`);
-      say([`#${r.name}`, ...RAID_TXT[r.id], `＊搶到：${got.join('、')}`], endWeek);
+      const ra = ally ? RAID_ALLY[ally] : null, rf = ally && S.h[ally].fall === 'fallen';
+      say([`#${r.name}`, ...RAID_TXT[r.id], ...(ra ? (rf ? ra.fz : ra.n) : []), `＊搶到：${got.join('、')}`], () => { if (ra) aff(ally, rf ? ra.afz : ra.aff); endWeek(); });
     },
     lose: () => { S.morale = clamp(S.morale - 10, 0, 100); say(['你被打了出來，狼狽地爬回翠湖苑。', '＊士氣 -10'], endWeek); }
   });
@@ -768,7 +787,7 @@ function mkEnemy(type) {
 }
 function combat(list, o) {
   const C = { es: list.map(mkEnemy), i: 0, log: [], ally: o.ally || null, stun: false };
-  [].concat(o.intro || []).forEach(x => C.log.push(T(x)));
+  [].concat(o.intro || []).filter(Boolean).forEach(x => C.log.push(T(x)));
   C.log.push(`敵人：${C.es.map(e => e.n).join('、')}${C.ally ? `｜同行：${HER[C.ally].name}` : ''}`);
   drawCombat(C, o);
 }
@@ -779,6 +798,7 @@ function drawCombat(C, o) {
    <div class="foe"><div class="foe-n">${e.n}<small>${C.i + 1} / ${C.es.length}</small></div><div class="bar red"><i style="width:${e.hp / e.max * 100}%"></i></div><div class="stat">HP ${e.hp}/${e.max}・攻擊 ${e.atk}${e.def ? '・防禦 ' + e.def : ''}</div></div>
    <div class="me"><div class="stat">${T('{N}')}・攻擊 ${atk()}・防禦 ${def()}${C.ally ? '・同行 ' + HER[C.ally].name : ''}</div><div class="bar ${S.hp < 35 ? 'red' : ''}"><i style="width:${S.hp / S.maxhp * 100}%"></i></div><div class="stat">HP ${S.hp}/${S.maxhp}</div></div>
    <ol class="flog">${C.log.slice(-8).map(x => `<li>${x}</li>`).join('')}</ol></div>`;
+  const fl = $('.flog'); if (fl) fl.scrollTop = fl.scrollHeight;
   renderChoices([
     { t: '攻擊', sub: `約 ${atk()} 傷害`, do: () => act(C, o, 'hit') },
     { t: '重擊', sub: '65% 命中・雙倍', do: () => act(C, o, 'heavy') },
@@ -826,25 +846,98 @@ function act(C, o, a) {
   drawCombat(C, o);
 }
 /* 投降：人類對手有機會放過你（交出物資），怪物幾乎不可能；同伴在場時機率較高。首領戰不能投降 */
-const ZOMBIE_NAMES = ['行屍', '感染野犬', '感染的醫護', '腐爛的員警', '跑者', '巨屍', '屍王'];
+const ZOMBIE_NAMES = ['行屍', '感染野犬', '感染的醫護', '腐爛的員警', '跑者', '巨屍', '屍王', '發狂的男子'];
 const isZombie = e => ZOMBIE_NAMES.includes(e.n) || e.n.includes('變異');
 const canSurrender = (C, o) => !o.noSurrender && !C.es.some(e => e.boss);
 function surrenderOdds(C) {
-  const alive = C.es.slice(C.i), human = alive.every(e => !isZombie(e));
+  const alive = C.es.slice(C.i), human = !isZombie(alive[0]);
   return clamp((human ? .5 : .1) + (C.ally ? .2 : 0) - (S.dark >= 50 && human ? .15 : 0), .05, .85);
 }
+/* 投降的差分：依對手種類、同伴、惡名決定結果與文字 */
+const SURR_H = {
+  '暴徒': ['「算你識相。」領頭的啐了一口。', '暴徒笑著用你的武器敲了敲你的頭。「下次見面，別再擋路。」'],
+  '黑鴉打手': ['「黑鴉收稅，從來不開收據。」', '面具後面傳來一聲悶笑。「回去告訴你們老大，這是學費。」'],
+  '黑鴉幹部「禿鷹」': ['禿鷹用槍管挑起你的下巴。「翠湖苑的王？原來也會跪。」'],
+  '據點守衛': ['「規矩你懂的。留下東西，滾。」', '守衛們面無表情地搜身，像是在處理一批入庫的貨。'],
+  '持刀住戶': ['他握刀的手一直在抖，與其說兇狠，不如說他自己也怕得要命。', '「我、我只是想活下去……」他一邊哭一邊搜你的口袋。'],
+  '阿彪': ['「林先生～早這樣不就好了？」阿彪笑得露出金牙。'],
+  '趙德凱': ['趙德凱笑得跟上一世一模一樣，連彎腰撿你武器的姿勢都一樣。'],
+  '阿傑': ['阿傑看著你，握著鐵管的手遲遲沒有落下。「……快走。我只放你這一次。」'],
+  '被你放走的殺人犯': ['「我說過你會後悔。」他把你的武器踢進陰溝，笑得很開心。'],
+  '王董': ['王董的笑很勉強：「林、林老弟，大家鄰居一場……東西留下就好。」']
+};
+const SURR_DIE_H = {
+  '暴徒': '暴徒聽完你的求饒，大笑著把鐵棍敲在你後腦。「誰跟你講道理？」',
+  '黑鴉打手': '黑鴉打手連看都沒看你一眼。「首領說，翠湖苑的人，一個都不留。」',
+  '黑鴉幹部「禿鷹」': '禿鷹蹲下來，替你把眼睛闔上。「別怕，你的物資我們會好好使用。」',
+  '據點守衛': '守衛看了看你，又看了看身後的同伴。「活口會報信。」',
+  '持刀住戶': '他哭著把刀捅進去的時候，嘴裡一直重複：「對不起、對不起……」',
+  '阿彪': '阿彪嘆了口氣。「林先生，欠錢的人投降沒有用啦。」',
+  '趙德凱': '趙德凱笑著把你推向樓梯口。和上一世一模一樣的角度、一模一樣的笑。',
+  '阿傑': '阿傑閉上眼睛，扣下了扳機。他在黑鴉那邊，沒有第二次選擇。',
+  '被你放走的殺人犯': '「我上次放過你嗎？沒有？」他的刀已經在你肚子裡了。',
+  '王董': '王董的聲音發著抖：「對不起了，林老弟，我家也有人要吃飯。」'
+};
+const SURR_Z = {
+  distract: n => `${n}的動作忽然停住，歪頭轉向遠處突然響起的玻璃碎裂聲，搖搖晃晃地走了。你癱坐在地，過了很久才敢喘氣。`,
+  bait: n => `${n}撲向你的瞬間，被旁邊一具倒下的屍體絆了一跤。你連滾帶爬鑽進縫隙，躲到牠離開為止。`,
+  hide: n => `你滾進最近的櫃子，屏住呼吸。${n}在外面轉了一個小時，才拖著腳步離開。`
+};
+const SURR_ALLY_Z = {
+  su: ['蘇晴硬是把你從牠的爪下拖了出去，一路退到安全的地方，雙手一直在抖。', ['蘇晴', '不准再這樣了……你聽到沒有。']],
+  ye: ['葉凜朝天花板連開三槍，把牠引向另一頭，抓著你的後領撤退。', ['葉凜', '下次想投降之前，先想想我的子彈。']],
+  shen: ['沈語桐一邊拖你一邊大喊：「打膝蓋！牠的平衡神經壞死了！」她用實驗室的酒精燈點燃了抹布，丟向牠的腳邊。', ['沈語桐', '對、對不起我丟太用力了……']]
+};
+const SURR_ALLY_Z_FALLEN = {
+  su: ['蘇晴面無表情地把手術刀插進牠的眼窩，拖著你離開。', ['蘇晴', '我說過，我只救你一個人。所以，你不准死。']],
+  ye: ['葉凜冷冷地補上最後一槍，把你從地上拎起來。', ['葉凜', '投降？那是給弱者用的詞。你不是。']],
+  shen: ['沈語桐推了推眼鏡，把一管不知名的藥劑扎進牠的脖子。牠抽搐了兩下，倒下了。', ['沈語桐', '實驗成功。……不好意思，我分心了。']]
+};
+const SURR_ALLY_H = {
+  su: e => [`蘇晴張開雙手擋在你前面：「我是護理師，你們有人受傷的話，我可以治！」`, `${e}猶豫了很久。最後他們只搜走一半的東西，把你們放走了。`],
+  ye: e => ['葉凜亮出證件和手槍：「第六分局。放下武器，我當沒看到。」', `雙方僵持了整整一分鐘。${e}先退了半步，你們各退一步，各走各的。`],
+  shen: e => ['沈語桐結結巴巴地報出一串座標：「我、我知道哪裡還有一整倉庫的罐頭！」', `${e}半信半疑，但那確實是真的。你們用情報換了一條命。`]
+};
+const SURR_ALLY_H_FALLEN = {
+  su: e => [`蘇晴冷冷地把手搭在槍上：「碰他一下試試看。」`, `${e}被她的眼神嚇得退了半步。你們就這樣走了出去。`],
+  ye: e => [`葉凜拔槍，槍口穩穩對準領頭的眉心。「三秒。」`, `${e}連一秒都沒撐到，丟下武器跑了。`],
+  shen: e => ['沈語桐輕聲說：「你們身上的傷，有一半是感染初期。要不要我順便幫你們驗一下？」', `${e}臉色大變，一路退到巷口才敢轉身逃跑。`]
+};
 function surrender(C, o) {
-  const alive = C.es.slice(C.i), human = alive.every(e => !isZombie(e));
-  if (chance(surrenderOdds(C))) {
-    const f = Math.floor(S.inv.food / 3), w = Math.floor(S.inv.water / 3), m = S.phase === 'prep' ? Math.round(S.money * .2) : 0;
-    S.inv.food -= f; S.inv.water -= w; S.money -= m; S.morale = clamp(S.morale - 10, 0, 100); S.hp = Math.max(1, S.hp);
-    log('戰鬥中投降，保住一命');
-    const txt = human ? ['你把武器丟在地上，舉起雙手。', `${alive[0].n}盯著你看了很久，最後搜走了你身上能拿的東西，把你踹了出去。`] :
-      C.ally ? ['你腿一軟，坐在地上。', `${HER[C.ally].name}硬是把你從屍群邊緣拖了出去，一路退到安全的地方。`] :
-      ['你背靠著牆，閉上眼睛等死。', '牠們卻被遠處的玻璃碎裂聲引走了。你癱坐很久，才發現自己還活著。'];
-    return say([...txt, `＊士氣 -10${f + w ? `，糧食 -${f}、飲水 -${w}` : ''}${m ? `，資金 -${fmt(m)}` : ''}`], () => (o.surrender || o.lose || o.flee || (S.phase === 'prep' ? prepHub : endWeek))());
+  const alive = C.es.slice(C.i), e = alive[0], human = !isZombie(e), ally = C.ally;
+  const fz = ally && S.h[ally].fall === 'fallen';
+  if (!chance(surrenderOdds(C))) {
+    return ending('surrender', `${human ? 'h' : 'z'}:${e.n}:${ally || ''}`);
   }
-  ending('death', human ? 'surrender-human' : 'surrender-zombie');
+  let f = Math.floor(S.inv.food / 3), w = Math.floor(S.inv.water / 3), m = S.phase === 'prep' ? Math.round(S.money * .2) : 0, mo = 10, hurt = 0, extra = '';
+  const lines = ['你把手裡的武器放在地上，慢慢舉起雙手。'];
+  if (human) {
+    const known = S.dark >= 30 && chance(.6);
+    if (known) lines.push('他們認出了你的臉。「12 樓的屠夫……」有人低聲說，氣氛變得很微妙。');
+    if (ally && chance(.6)) {
+      const tx = (fz ? SURR_ALLY_H_FALLEN : SURR_ALLY_H)[ally](e.n);
+      lines.push(...tx); f = Math.floor(f / 2); w = Math.floor(w / 2); m = Math.floor(m / 2); mo = 5;
+      if (!fz) aff(ally, 2);
+    } else {
+      const kind = pick(['rob', 'labor', 'gap']);
+      lines.push(pick(SURR_H[e.n] || ['對方盯著你看了很久。']));
+      if (kind === 'rob') lines.push('他們搜光了你身上能拿的東西，把你踹了出去。');
+      else if (kind === 'labor') { f = w = m = 0; mo = 15; hurt = 15; lines.push('他們沒拿走東西，反而把你押去搬了一整天的貨。入夜才放你回去，渾身痠痛。'); extra = '，HP -15'; }
+      else { f = Math.floor(f / 2); w = Math.floor(w / 2); mo = 6; lines.push('他們正要動手，遠處傳來屍群的嚎叫。所有人臉色一變，你趁亂撿起半袋東西，頭也不回地逃了。'); }
+    }
+  } else if (ally) {
+    const tx = (fz ? SURR_ALLY_Z_FALLEN : SURR_ALLY_Z)[ally];
+    lines.push('你腿一軟，坐在地上。', ...tx); f = w = m = 0; mo = 5;
+    if (ally === 'ye' && !fz) aff('ye', -3); else if (ally === 'su' || ally === 'shen') aff(ally, 2);
+  } else {
+    f = w = m = 0; mo = 8;
+    lines.push(pick(Object.values(SURR_Z).filter((_, i) => !(['跑者', '巨屍'].includes(e.n) && i === 0)))(e.n));
+  }
+  S.inv.food -= f; S.inv.water -= w; S.money -= m; S.hp = Math.max(1, S.hp - hurt);
+  S.morale = clamp(S.morale - mo, 0, 100);
+  log('戰鬥中投降，保住一命');
+  lines.push(`＊士氣 -${mo}${f + w ? `，糧食 -${f}、飲水 -${w}` : ''}${m ? `，資金 -${fmt(m)}` : ''}${extra}`);
+  say(lines, () => (o.surrender || o.lose || o.flee || (S.phase === 'prep' ? prepHub : endWeek))());
 }
 function endCombat(C, o, won) {
   $('#choices').classList.remove('grid');
@@ -853,16 +946,25 @@ function endCombat(C, o, won) {
   ending('death', 'combat');
 }
 
+/* 做死選項：選了就直接進入對應的壞結局 */
+const FOOL = (t, sub, k, cause) => ({ t, cls: 'hot', sub, fool: 1, do: () => ending(k, cause) });
+
 /* ========== 結局 ========== */
 function finalEnding() {
   let k;
   const okH = x => S.h[x].joined && S.h[x].alive && S.h[x].fall !== 'left';
   if (S.romance === 'all' && !['su', 'ye', 'shen'].every(okH)) S.romance = ['su', 'ye', 'shen'].filter(okH).sort((a, b) => S.h[b].aff - S.h[a].aff)[0] || null;
   else if (S.romance && S.romance !== 'all' && !okH(S.romance)) S.romance = null;
+  const mods = Object.keys(S.flags.aiMods || {}).length, built = BASE_UP.filter(b => S.base[b.id]).length;
   if (S.flags.cure && S.flags.milLink && S.flags.fateWon && S.survivors >= 8 && S.dark < 70) k = 'true';
   else if (S.dark >= 70 && S.flags.fateWon) k = 'tyrant';
+  else if (S.base.ai && S.flags.aiNet && S.flags.aiOn && mods >= 3 && S.dark < 50) k = 'ai';
   else if (S.romance === 'all') k = 'harem';
   else if (S.romance) k = S.romance;
+  else if (S.flags.milLink && S.flags.fateWon && S.dark < 70 && S.survivors >= 5) k = 'army';
+  else if (S.flags.biaoJoin && S.base.radio && S.survivors >= 8 && S.dark < 40) k = 'merchant';
+  else if (built >= 16 && baseDef() >= 85) k = 'fortress';
+  else if (S.dark === 0 && S.rep >= 70 && S.survivors >= 10) k = 'lighthouse';
   else if (S.survivors >= 15 && S.rep >= 60) k = 'king';
   else k = 'lone';
   ending(k);
