@@ -1,5 +1,5 @@
 'use strict';
-const VERSION = 'ver0.5.1';
+const VERSION = window.__VER ? 'ver' + window.__VER : 'ver0.5.1';
 /* ========== 工具 ========== */
 const $ = s => document.querySelector(s);
 const R = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
