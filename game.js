@@ -665,13 +665,14 @@ function endWeek() {
   // 生產
   let fp = 0, wp = 0;
   if (S.base.garden && S.week >= 8) fp += 2;
-  if (aiMod('farm')) { fp += 2; rows.push(['小翠農業排程 糧食', '+2', 'pos']); }
-  if (fx('hydro')) { fp += 3; rows.push(['水耕植栽櫃 糧食', '+3', 'pos']); }
-  if (fx('well')) { wp += 3; rows.push(['水井 飲水', '+3', 'pos']); }
+  let xf = 0, xw = 0;
+  if (aiMod('farm')) { xf += 2; rows.push(['小翠農業排程 糧食', '+2', 'pos']); }
+  if (fx('hydro')) { xf += 3; rows.push(['水耕植栽櫃 糧食', '+3', 'pos']); }
+  if (fx('well')) { xw += 3; rows.push(['水井 飲水', '+3', 'pos']); }
   if (S.survivors >= 3) { fp += Math.floor(S.survivors / 3); wp += Math.floor(S.survivors / 3); }
   if (fp) rows.push(['菜園／倖存者採集 糧食', '+' + fp, 'pos']);
   if (wp) rows.push(['倖存者採集 飲水', '+' + wp, 'pos']);
-  S.inv.food += fp; S.inv.water += wp;
+  S.inv.food += fp + xf; S.inv.water += wp + xw;
   rows.push(['糧食消耗', '-' + n.food, 'neg']);
   if (n.water) rows.push(['飲水消耗', '-' + n.water, 'neg']);
   const msgs = [];
