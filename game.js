@@ -1,4 +1,5 @@
 'use strict';
+const VERSION = 'ver0.5.1';
 /* ========== 工具 ========== */
 const $ = s => document.querySelector(s);
 const R = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
@@ -438,12 +439,14 @@ function panelBag() {
     <button class="sbtn" id="useMed" ${S.inv.med > 0 && S.hp < S.maxhp ? '' : 'disabled'}>使用醫療包（回復 ${30 + S.aid * 8} HP）</button>`,
     b => { const u = b.querySelector('#useMed'); if (u) u.onclick = () => { gain('med', -1, true); hpc(30 + S.aid * 8); render(); panelBag(); }; });
 }
+function ver(el) { const v = document.createElement('small'); v.className = 'ver'; v.textContent = VERSION; el.appendChild(v); }
 function panelSys() {
   const slots = [1, 2, 3].map(i => { const d = readSlot(i); return `<div class="row"><div class="nm">存檔 ${i}</div><div class="pr" style="font-size:12px">${d ? d.label : '空'}</div><div class="ds">${d ? d.name + '・' + new Date(d.at).toLocaleString('zh-TW') : '—'}</div><div class="bt"><button data-s="${i}" ${atHub ? '' : 'disabled'}>存檔</button><button data-l="${i}" ${d ? '' : 'disabled'}>讀取</button></div></div>`; }).join('');
   const au = readSlot('auto');
   openSheet('系統', `<div class="ds" style="font-size:13px;line-height:1.6">${cloudText()}</div>${cloudState === 'on' ? '<button class="sbtn" id="resync">從雲端重新同步存檔</button>' : ''}${atHub ? '' : '<div class="ds" style="color:var(--muted);font-size:13px">只能在每日／每週的行動選單存檔。</div>'}
     ${slots}<div class="row"><div class="nm">自動存檔</div><div class="pr" style="font-size:12px">${au ? au.label : '空'}</div><div class="bt"><button data-l="auto" ${au ? '' : 'disabled'}>讀取</button></div></div>
     <button class="sbtn" id="toTitle">回到標題畫面</button>`, b => {
+    ver($('#sheetT'));
     b.querySelectorAll('[data-s]').forEach(x => x.onclick = () => { save(x.dataset.s); panelSys(); });
     b.querySelectorAll('[data-l]').forEach(x => x.onclick = () => load(x.dataset.l));
     b.querySelector('#toTitle').onclick = () => { closeSheet(true); title(); };
@@ -986,7 +989,7 @@ function title() {
   S = null; atHub = false; render();
   const au = readSlot('auto'), seen = endingsSeen();
   $('#text').innerHTML = `<div class="title">
-    <div class="tag">2026.12.01 — 2027.12.31</div>
+    <div class="tag">2026.12.01 — 2027.12.31 <span class="ver">${VERSION}</span></div>
     <h1>重生末日<br><em>翠湖苑</em></h1>
     <p>上一世，你在臺中這棟老大樓的樓梯間，被笑臉迎人的鄰居推進屍群。<br>睜開眼，回到紅眼病爆發前 31 天。<br>刷爆信用卡、貸光所有能貸的錢，末日之後沒有人會來討債。這一次，換你來決定誰活下去。</p>
     <p style="font-family:var(--f-ui);font-size:13px">${cloudText()}</p>
